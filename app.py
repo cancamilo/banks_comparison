@@ -41,6 +41,20 @@ def calculate_monthly_payment(total_borrowed, interest_rate_annual, number_of_ye
     
     return monthly_payment, number_of_months
 
+def calculate_annual_interest(total_borrowed, monthly_payment, monthly_interest_rate):
+    """Calculate annual interest paid in the first year (for ROCE calculation)."""
+    remaining_balance = total_borrowed
+    annual_interest = 0
+    
+    # Calculate interest for first 12 months
+    for _ in range(12):
+        interest_payment = remaining_balance * monthly_interest_rate
+        principal_payment = monthly_payment - interest_payment
+        remaining_balance = remaining_balance - principal_payment
+        annual_interest += interest_payment
+    
+    return annual_interest
+
 def calculate_total_interest(total_borrowed, monthly_payment, number_of_months, monthly_interest_rate):
     """Calculate total interest paid over the loan term."""
     remaining_balance = total_borrowed
@@ -54,9 +68,13 @@ def calculate_total_interest(total_borrowed, monthly_payment, number_of_months, 
     
     return total_interest_paid
 
-def calculate_roce(annual_rental_income, annual_mortgage_cost, annual_fees, down_payment):
-    """Calculate Return on Capital Employed (ROCE)."""
-    annual_net_income = annual_rental_income - annual_mortgage_cost - annual_fees
+def calculate_roce(annual_rental_income, annual_interest_cost, annual_fees, down_payment):
+    """Calculate Return on Capital Employed (ROCE).
+    
+    Note: Only interest and fees are costs. Principal payments build equity (capital creation).
+    ROCE = (Annual Rental Income - Annual Interest - Annual Fees) / Down Payment × 100
+    """
+    annual_net_income = annual_rental_income - annual_interest_cost - annual_fees
     if down_payment > 0:
         roce = (annual_net_income / down_payment) * 100
     else:
@@ -66,7 +84,8 @@ def calculate_roce(annual_rental_income, annual_mortgage_cost, annual_fees, down
 # Title
 st.title("🏦 Bank Mortgage Comparison Tool")
 st.markdown("Compare multiple bank mortgage offers and find the best option based on **ROCE (Return on Capital Employed)**")
-st.markdown("**ROCE = (Annual Rental Income - Annual Mortgage Costs - Annual Fees) / Down Payment × 100**")
+st.markdown("**ROCE = (Annual Rental Income - Annual Interest - Annual Fees) / Down Payment × 100**")
+st.info("💡 **Note:** Principal payments build equity (capital creation), so only interest and fees are considered costs.")
 
 # Sidebar for property details
 with st.sidebar:
@@ -187,21 +206,29 @@ if st.session_state.bank_offers:
                 offer['number_of_years']
             )
             
-            # Calculate annual costs
-            annual_mortgage_cost = monthly_payment * 12
-            annual_fees = offer['monthly_fees'] * 12
-            annual_total_cost = annual_mortgage_cost + annual_fees
+            # Calculate annual interest (first year) - this is the actual cost
+            monthly_interest_rate = (offer['interest_rate_annual'] / 100) / 12
+            annual_interest = calculate_annual_interest(
+                offer['loan_amount'],
+                monthly_payment,
+                monthly_interest_rate
+            )
             
-            # Calculate ROCE
+            # Calculate annual fees
+            annual_fees = offer['monthly_fees'] * 12
+            
+            # Calculate annual principal payment (equity building)
+            annual_principal = (monthly_payment * 12) - annual_interest
+            
+            # Calculate ROCE (only interest and fees are costs)
             roce, annual_net_income = calculate_roce(
                 annual_rental_income,
-                annual_mortgage_cost,
+                annual_interest,
                 annual_fees,
                 offer['down_payment']
             )
             
             # Calculate total interest over loan term
-            monthly_interest_rate = (offer['interest_rate_annual'] / 100) / 12
             total_interest = calculate_total_interest(
                 offer['loan_amount'],
                 monthly_payment,
@@ -217,10 +244,9 @@ if st.session_state.bank_offers:
                 'Down Payment': offer['down_payment'],
                 'Monthly Payment': round(monthly_payment, 2),
                 'Monthly Fees': offer['monthly_fees'],
-                'Total Monthly Cost': round(monthly_payment + offer['monthly_fees'], 2),
-                'Annual Mortgage Cost': round(annual_mortgage_cost, 2),
+                'Annual Interest': round(annual_interest, 2),
+                'Annual Principal': round(annual_principal, 2),
                 'Annual Fees': round(annual_fees, 2),
-                'Annual Total Cost': round(annual_total_cost, 2),
                 'Annual Net Income': round(annual_net_income, 2),
                 'ROCE (%)': round(roce, 2),
                 'Total Interest (lifetime)': round(total_interest, 2)
@@ -269,7 +295,7 @@ if st.session_state.bank_offers:
             with col3:
                 st.metric("Annual Net Income", f"${best_bank['Annual Net Income']:,.2f}")
             with col4:
-                st.metric("Total Monthly Cost", f"${best_bank['Total Monthly Cost']:,.2f}")
+                st.metric("Annual Interest", f"${best_bank['Annual Interest']:,.2f}")
             
             # Detailed info
             with st.expander("📝 Detailed Information", expanded=True):
@@ -282,7 +308,8 @@ if st.session_state.bank_offers:
                 with col2:
                     st.write(f"**Monthly Payment:** ${best_bank['Monthly Payment']:,.2f}")
                     st.write(f"**Monthly Fees:** ${best_bank['Monthly Fees']:,.2f}")
-                    st.write(f"**Annual Mortgage Cost:** ${best_bank['Annual Mortgage Cost']:,.2f}")
+                    st.write(f"**Annual Interest:** ${best_bank['Annual Interest']:,.2f}")
+                    st.write(f"**Annual Principal (equity):** ${best_bank['Annual Principal']:,.2f}")
                     st.write(f"**Total Interest (lifetime):** ${best_bank['Total Interest (lifetime)']:,.2f}")
     
     # Show previous comparison if exists
