@@ -41,19 +41,48 @@ def calculate_monthly_payment(total_borrowed, interest_rate_annual, number_of_ye
     
     return monthly_payment, number_of_months
 
-def calculate_annual_interest(total_borrowed, monthly_payment, monthly_interest_rate):
-    """Calculate annual interest paid in the first year (for ROCE calculation)."""
-    remaining_balance = total_borrowed
-    annual_interest = 0
+def calculate_interest_stats(total_borrowed, monthly_payment, number_of_months, monthly_interest_rate):
+    """Calculate min, average, and max annual interest over the loan term.
     
-    # Calculate interest for first 12 months
-    for _ in range(12):
+    Returns:
+        dict with 'min', 'avg', 'max' annual interest values
+    """
+    remaining_balance = total_borrowed
+    total_interest_paid = 0
+    annual_interests = []
+    current_year_interest = 0
+    month_count = 0
+    
+    for month in range(1, number_of_months + 1):
         interest_payment = remaining_balance * monthly_interest_rate
         principal_payment = monthly_payment - interest_payment
         remaining_balance = remaining_balance - principal_payment
-        annual_interest += interest_payment
+        total_interest_paid += interest_payment
+        current_year_interest += interest_payment
+        month_count += 1
+        
+        # At the end of each year (12 months), record annual interest
+        if month_count == 12:
+            annual_interests.append(current_year_interest)
+            current_year_interest = 0
+            month_count = 0
     
-    return annual_interest
+    # Handle remaining months if loan term doesn't divide evenly by 12
+    if month_count > 0:
+        # Prorate the remaining interest to annual equivalent
+        remaining_annual_equivalent = (current_year_interest / month_count) * 12
+        annual_interests.append(remaining_annual_equivalent)
+    
+    if not annual_interests:
+        # If less than a year, calculate as if it were a full year
+        avg_interest = total_interest_paid
+        return {'min': avg_interest, 'avg': avg_interest, 'max': avg_interest}
+    
+    return {
+        'min': min(annual_interests),
+        'avg': sum(annual_interests) / len(annual_interests),
+        'max': max(annual_interests)
+    }
 
 def calculate_total_interest(total_borrowed, monthly_payment, number_of_months, monthly_interest_rate):
     """Calculate total interest paid over the loan term."""
@@ -127,7 +156,7 @@ with st.expander("➕ Add New Bank Offer", expanded=len(st.session_state.bank_of
                 "Interest Rate (%)",
                 min_value=0.0,
                 max_value=20.0,
-                value=3.5,
+                value=3.55,
                 step=0.1,
                 format="%.2f"
             )
@@ -150,7 +179,7 @@ with st.expander("➕ Add New Bank Offer", expanded=len(st.session_state.bank_of
             monthly_fees = st.number_input(
                 "Monthly Fees ($)",
                 min_value=0.0,
-                value=150.0,
+                value=90.0,
                 step=10.0,
                 format="%.2f",
                 help="Combined: insurance + cleaning + taxes"
@@ -206,27 +235,40 @@ if st.session_state.bank_offers:
                 offer['number_of_years']
             )
             
-            # Calculate annual interest (first year) - this is the actual cost
+            # Calculate interest statistics (min, avg, max)
             monthly_interest_rate = (offer['interest_rate_annual'] / 100) / 12
-            annual_interest = calculate_annual_interest(
+            interest_stats = calculate_interest_stats(
                 offer['loan_amount'],
                 monthly_payment,
+                number_of_months,
                 monthly_interest_rate
             )
             
             # Calculate annual fees
             annual_fees = offer['monthly_fees'] * 12
             
-            # Calculate annual principal payment (equity building)
-            annual_principal = (monthly_payment * 12) - annual_interest
-            
-            # Calculate ROCE (only interest and fees are costs)
-            roce, annual_net_income = calculate_roce(
+            # Calculate ROCE for min, avg, and max interest scenarios
+            roce_min, net_income_min = calculate_roce(
                 annual_rental_income,
-                annual_interest,
+                interest_stats['max'],  # Max interest = worst case = min ROCE
                 annual_fees,
                 offer['down_payment']
             )
+            roce_avg, net_income_avg = calculate_roce(
+                annual_rental_income,
+                interest_stats['avg'],
+                annual_fees,
+                offer['down_payment']
+            )
+            roce_max, net_income_max = calculate_roce(
+                annual_rental_income,
+                interest_stats['min'],  # Min interest = best case = max ROCE
+                annual_fees,
+                offer['down_payment']
+            )
+            
+            # Calculate annual principal (using average interest)
+            annual_principal_avg = (monthly_payment * 12) - interest_stats['avg']
             
             # Calculate total interest over loan term
             total_interest = calculate_total_interest(
@@ -244,19 +286,25 @@ if st.session_state.bank_offers:
                 'Down Payment': offer['down_payment'],
                 'Monthly Payment': round(monthly_payment, 2),
                 'Monthly Fees': offer['monthly_fees'],
-                'Annual Interest': round(annual_interest, 2),
-                'Annual Principal': round(annual_principal, 2),
+                'Annual Interest (Min)': round(interest_stats['min'], 2),
+                'Annual Interest (Avg)': round(interest_stats['avg'], 2),
+                'Annual Interest (Max)': round(interest_stats['max'], 2),
+                'Annual Principal (Avg)': round(annual_principal_avg, 2),
                 'Annual Fees': round(annual_fees, 2),
-                'Annual Net Income': round(annual_net_income, 2),
-                'ROCE (%)': round(roce, 2),
+                'ROCE Min (%)': round(roce_min, 2),
+                'ROCE Avg (%)': round(roce_avg, 2),
+                'ROCE Max (%)': round(roce_max, 2),
+                'Net Income (Min)': round(net_income_min, 2),
+                'Net Income (Avg)': round(net_income_avg, 2),
+                'Net Income (Max)': round(net_income_max, 2),
                 'Total Interest (lifetime)': round(total_interest, 2)
             })
         
         # Create comparison DataFrame
         comparison_df = pd.DataFrame(comparison_data)
         
-        # Sort by ROCE (descending)
-        comparison_df = comparison_df.sort_values('ROCE (%)', ascending=False).reset_index(drop=True)
+        # Sort by average ROCE (descending)
+        comparison_df = comparison_df.sort_values('ROCE Avg (%)', ascending=False).reset_index(drop=True)
         
         # Store in session state
         st.session_state.comparison_df = comparison_df
@@ -291,11 +339,13 @@ if st.session_state.bank_offers:
             with col1:
                 st.metric("Bank", best_bank['Bank'])
             with col2:
-                st.metric("ROCE", f"{best_bank['ROCE (%)']:.2f}%", delta=f"{best_bank['ROCE (%)']:.2f}%")
+                st.metric("ROCE (Avg)", f"{best_bank['ROCE Avg (%)']:.2f}%", 
+                         delta=f"{best_bank['ROCE Avg (%)']:.2f}%")
             with col3:
-                st.metric("Annual Net Income", f"${best_bank['Annual Net Income']:,.2f}")
+                st.metric("ROCE Range", 
+                         f"{best_bank['ROCE Min (%)']:.2f}% - {best_bank['ROCE Max (%)']:.2f}%")
             with col4:
-                st.metric("Annual Interest", f"${best_bank['Annual Interest']:,.2f}")
+                st.metric("Net Income (Avg)", f"${best_bank['Net Income (Avg)']:,.2f}")
             
             # Detailed info
             with st.expander("📝 Detailed Information", expanded=True):
@@ -308,8 +358,15 @@ if st.session_state.bank_offers:
                 with col2:
                     st.write(f"**Monthly Payment:** ${best_bank['Monthly Payment']:,.2f}")
                     st.write(f"**Monthly Fees:** ${best_bank['Monthly Fees']:,.2f}")
-                    st.write(f"**Annual Interest:** ${best_bank['Annual Interest']:,.2f}")
-                    st.write(f"**Annual Principal (equity):** ${best_bank['Annual Principal']:,.2f}")
+                    st.write("**Annual Interest:**")
+                    st.write(f"  - Min: ${best_bank['Annual Interest (Min)']:,.2f}")
+                    st.write(f"  - Avg: ${best_bank['Annual Interest (Avg)']:,.2f}")
+                    st.write(f"  - Max: ${best_bank['Annual Interest (Max)']:,.2f}")
+                    st.write(f"**ROCE:**")
+                    st.write(f"  - Min: {best_bank['ROCE Min (%)']:.2f}%")
+                    st.write(f"  - Avg: {best_bank['ROCE Avg (%)']:.2f}%")
+                    st.write(f"  - Max: {best_bank['ROCE Max (%)']:.2f}%")
+                    st.write(f"**Annual Principal (equity):** ${best_bank['Annual Principal (Avg)']:,.2f}")
                     st.write(f"**Total Interest (lifetime):** ${best_bank['Total Interest (lifetime)']:,.2f}")
     
     # Show previous comparison if exists
@@ -323,7 +380,7 @@ if st.session_state.bank_offers:
         
         if len(st.session_state.comparison_df) > 0:
             best_bank = st.session_state.comparison_df.iloc[0]
-            st.info(f"🏆 Best Option: **{best_bank['Bank']}** with ROCE of **{best_bank['ROCE (%)']:.2f}%**")
+            st.info(f"🏆 Best Option: **{best_bank['Bank']}** with average ROCE of **{best_bank['ROCE Avg (%)']:.2f}%** (range: {best_bank['ROCE Min (%)']:.2f}% - {best_bank['ROCE Max (%)']:.2f}%)")
 else:
     st.info("👆 Add at least one bank offer to start comparing!")
 
