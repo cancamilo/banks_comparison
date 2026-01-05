@@ -100,7 +100,7 @@ with st.sidebar:
     monthly_rental_income = st.number_input(
         "Monthly Rental Income ($)",
         min_value=0.0,
-        value=800.0,
+        value=675.0,
         step=50.0,
         format="%.2f"
     )
